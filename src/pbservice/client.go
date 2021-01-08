@@ -6,7 +6,7 @@ import "fmt"
 
 import "crypto/rand"
 import "math/big"
-
+import "time"
 
 type Clerk struct {
 	vs       *viewservice.Clerk
@@ -77,6 +77,18 @@ func call(srv string, rpcname string,
 // says the key doesn't exist (has never been Put().
 //
 func (ck *Clerk) Get(key string) string {
+	kid:=&GetArgs{Key: key, Id: nrand()}
+	var reply GetReply
+	okay:=call(ck.currView.Primary, "PBServer.Get",kid,&reply)
+	for okay==false||reply.Err==ErrWrongServer{
+		time.Sleep(viewservice.PingInterval)
+		ck.currView,_=ck.vs.Get()
+		okay=call(ck.currView.Primary,"PBserver.Get",kid,&reply)
+	}
+	if reply.Err==ErrNoKey{
+		return""
+	}
+	return reply.Value
 	// Your code here.
 
 	//  1. Prepare the arguments
@@ -87,7 +99,6 @@ func (ck *Clerk) Get(key string) string {
 
 	//  3. Keep retrying until we get an answer	
 
-	return ""
 }
 
 
@@ -95,6 +106,14 @@ func (ck *Clerk) Get(key string) string {
 // send a Put or Append RPC
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	kid:=&PutAppendArgs{Key:key, Value:value,Op:op,Id:nrand()}
+	var reply PutAppendReply
+	okay:=call(ck.currView.Primary,"PBServer.PutAppend",kid,&reply)
+	for okay==false||reply.Err!=OK{
+		time.Sleep(viewservice.PingInterval)
+		ck.currView,_=ck.vs.Get()
+		okay=call(ck.currView.Primary,"PBServer.PutAppend",kid,&reply)
+	}
 	// Your code here.
 
 	//  1. Prepare the arguments

@@ -28,9 +28,10 @@ type ViewServer struct {
 //
 // server Ping RPC handler.
 //
-func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
+func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
+	reply.View=vs.currView
 
 	// Your code here.	
 
@@ -45,9 +46,38 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 //
 // server Get() RPC handler.
 //
-func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
+
+func UpdateView(vs *ViewServer, primary string, backup string){
+	vs.currView.Viewnum+=1
+	vs.currView.Primary=primary
+	vs.currView.Backup=backup
+	vs.primaryAckedCurrView=false
+	vs.idleServer=""
+}
+func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
+	
+	Ser, viewn:= args.Me, args.Viewnum
+	vs.pingTimeMap[Ser]=time.Now()
+	if Ser==vs.currView.Primary{
+		if viewn==0&&vs.primaryAckedCurrView==true{
+			UpdateView(vs, vs.currView.Backup, vs.idleServer)
+		} else if viewn==vs.currView.Viewnum{
+			vs.primaryAckedCurrView=true
+		}
+	}else if Ser==vs.currView.Backup{
+		if viewn==0&&vs.primaryAckedCurrView==true{
+			UpdateView(vs,vs.currView.Primary, vs.idleServer)
+		}
+	} else{
+		if vs.currView.Viewnum==0{
+			UpdateView(vs, Ser,"")
+		} else{
+			vs.idleServer=Ser
+		}
+	}
+	reply.View=vs.currView
 
 	// Your code here.	
 
@@ -64,7 +94,30 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 //
 func (vs *ViewServer) tick() {
 	vs.mu.Lock()
-	defer vs.mu.Unlock()	
+	defer vs.mu.Unlock()
+	now:=time.Now()
+	ptime:=vs.pingTimeMap[vs.currView.Primary]
+	btime:=vs.pingTimeMap[vs.currView.Backup]
+	istime:=vs.pingTimeMap[vs.idleServer]
+	pwindow:=PingInterval * DeadPings
+	
+	if now.Sub(istime)>=pwindow{
+		vs.idleServer=""
+	} else{
+		if vs.primaryAckedCurrView==true&&vs.currView.Backup==""&&vs.idleServer!=""{
+			UpdateView(vs,vs.currView.Primary, vs.idleServer)
+		}
+	}
+	if now.Sub(btime)>=pwindow{
+		if vs.primaryAckedCurrView==true&&vs.idleServer!=""{
+			UpdateView(vs, vs.currView.Primary, vs.idleServer)
+		}
+	}
+	if now.Sub(ptime)>=pwindow{
+		if vs.primaryAckedCurrView==true{
+			UpdateView(vs,vs.currView.Backup,vs.idleServer)
+		}
+	}
 
 	// Your code here.	
 

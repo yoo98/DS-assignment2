@@ -90,9 +90,26 @@ func (pb *PBServer) FwdGetToBackup(args *GetArgs, reply *GetReply) error {
 
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
-	// Your code here.
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
+	if pb.currView.Primary!=pb.me{
+		reply.Err=ErrWrongServer
+		return nil
+	}
+	if IsDupGet(pb,args,reply){
+		reply.Value=pb.database[args.Key]
+		reply.Err=OK
+		return nil
+	}
+	pb.ApplyGet(args,reply)
+	if pb.currView.Backup!=""{
+		okay:=call(pb.currView.Backup,"PBServer.FwdGetToBackup",args,&reply)
+		if!okay||reply.Err==ErrWrongServer||reply.Value!=pb.database[args.Key]{
+			pb.syncDatabase=true
+		}
+	}
+	// Your code here.
+	
 
 	//  1. If not the primary, send error back to client	
 
@@ -164,6 +181,21 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 	// Your code here.
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
+	if pb.currView.Primary!=pb.me{
+		reply.Err=ErrWrongServer
+		return nil
+	}
+	if IsDupPutAppend(pb,args,reply){
+		reply.Err=OK
+		return nil
+	}
+	pb.ApplyPutAppend(args, reply)
+	if pb.currView.Backup!=""{
+		okay:=call(pb.currView.Backup,"PBServer.FwdPutAppendToBackup",args,&reply)
+		if!okay||reply.Err!=OK||pb.database[args.Key]!=args.Value{
+			pb.syncDatabase=true
+		}
+	}
 
 	//  1. If not the primary, send error back to client
 	
@@ -210,7 +242,24 @@ func (pb *PBServer) tick() {
 	// Your code here.
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
+	newView,err:=pb.vs.Ping(pb.currView.Viewnum)
+	if err!=nil{
+		fmt.Errorf("Ping(%v) failed",pb.currView.Viewnum)
+	}
+	if newView.Primary==pb.me&&newView.Backup!=""&&pb.currView.Backup!=newView.Backup{
+		pb.syncDatabase=true
+	}
+	if pb.syncDatabase==true{
+		pb.syncDatabase=false
+		args:=&FwdDatabaseToBackupArgs{Database:pb.database,PrevRequests:pb.prevRequests}
+		var reply FwdDatabaseToBackupReply
+		ok:=call(newView.Backup,"PBServer.FwdDatabaseToBackup",args,&reply)
+		if!ok||reply.Err!=OK{
+			pb.syncDatabase=true
+		}
+	}
 
+	pb.currView=newView
 	//  1. Ping viewservice for current view
 	
 	//  2. Backup added to view, primary should send it's complete k/v database
